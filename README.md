@@ -11,9 +11,9 @@ nudeguard-extension/
 ├── manifest.json      # Extension manifest (MV3)
 ├── background.js      # Service worker – settings & stats persistence
 ├── content.js         # Page scanner – detects & blurs images
-├── nude.js            # ⚠️ Placeholder – see Setup below
 ├── popup.html         # Extension popup UI
 ├── popup.js           # Popup logic
+├── README.md
 └── icons/
     ├── icon16.png
     ├── icon48.png
@@ -24,21 +24,7 @@ nudeguard-extension/
 
 ## ⚙️ Setup (Required)
 
-### 1. Download the real nude.js library
-
-The `nude.js` file in this package is a **stub placeholder**. You must replace it with the real library:
-
-```bash
-curl -o nude.js https://raw.githubusercontent.com/pa7/nude.js/master/src/nude.js
-```
-
-Or via npm:
-```bash
-npm install nudejs
-cp node_modules/nudejs/src/nude.js ./nude.js
-```
-
-### 2. Load the extension in Chrome
+### To Load the extension in Chrome
 
 1. Open Chrome and navigate to `chrome://extensions/`
 2. Enable **Developer Mode** (top-right toggle)
@@ -75,7 +61,6 @@ cp node_modules/nudejs/src/nude.js ./nude.js
 
 ## ⚠️ Limitations
 
-- **CORS**: Images served without CORS headers cannot be analyzed (canvas tainting restriction). The extension skips these gracefully.
 - **Accuracy**: nude.js uses skin-pixel heuristics, not deep learning. Expect some false positives and false negatives.
 - **Performance**: Very image-heavy pages may see a slight slowdown; the queue throttle minimizes this.
 - **HTTPS**: Works on both HTTP and HTTPS sites.
