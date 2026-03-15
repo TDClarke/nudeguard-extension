@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NudeGuard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0f14;
+      --surface: #14171f;
+      --surface2: #1c2030;
+      --border: #252a3a;
+      --accent: #4f8ef7;
+      --accent2: #a78bfa;
+      --green: #34d399;
+      --red: #f87171;
+      --text: #e8ecf5;
+      --muted: #6b7694;
+      --radius: 12px;
+    }
+
+    body {
+      width: 320px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    .header {
+      padding: 18px 20px 14px;
+      background: linear-gradient(135deg, #0d0f14 0%, #141929 100%);
+      border-bottom: 1px solid var(--border);
+      position: relative;
+      overflow: hidden;
+    }
+    .header::before {
+      content: '';
+      position: absolute;
+      top: -40px; right: -40px;
+      width: 120px; height: 120px;
+      background: radial-gradient(circle, rgba(79,142,247,.15) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 4px 16px rgba(79,142,247,.35);
+    }
+    .brand-name {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .brand-tagline {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+      font-family: 'DM Mono', monospace;
+    }
+
+    /* ── Toggle row ── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .toggle-label { font-size: 13px; font-weight: 700; color: var(--text); }
+    .toggle-sub   { font-size: 10px; color: var(--muted); margin-top: 1px; font-family: 'DM Mono', monospace; }
+
+    .toggle {
+      position: relative;
+      width: 44px; height: 24px;
+      cursor: pointer;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; inset: 0;
+      background: var(--border);
+      border-radius: 30px;
+      transition: background .3s;
+    }
+    .slider::before {
+      content: '';
+      position: absolute;
+      left: 3px; top: 3px;
+      width: 18px; height: 18px;
+      background: white;
+      border-radius: 50%;
+      transition: transform .3s cubic-bezier(.34,1.56,.64,1);
+      box-shadow: 0 1px 4px rgba(0,0,0,.4);
+    }
+    .toggle input:checked + .slider { background: var(--accent); }
+    .toggle input:checked + .slider::before { transform: translateX(20px); }
+
+    /* ── Stats ── */
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .stat-box {
+      background: var(--surface);
+      padding: 14px 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-box::before {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 2px;
+    }
+    .stat-box.blurred::before { background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+    .stat-box.scanned::before { background: linear-gradient(90deg, var(--green), #059669); }
+    .stat-num {
+      font-family: 'DM Mono', monospace;
+      font-size: 28px;
+      font-weight: 500;
+      line-height: 1;
+    }
+    .stat-box.blurred .stat-num { color: var(--accent); }
+    .stat-box.scanned .stat-num { color: var(--green); }
+    .stat-label { font-size: 10px; color: var(--muted); margin-top: 4px; letter-spacing: 0.4px; }
+
+    /* ── Controls ── */
+    .controls { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+    .control-group { display: flex; flex-direction: column; gap: 6px; }
+    .control-header { display: flex; justify-content: space-between; align-items: center; }
+    .control-name { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0.8px; text-transform: uppercase; }
+    .control-val {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--accent);
+      background: rgba(79,142,247,.1);
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 4px;
+      background: var(--border);
+      border-radius: 4px;
+      outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px; height: 16px;
+      background: var(--accent);
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 0 0 3px rgba(79,142,247,.2);
+      transition: box-shadow .2s;
+    }
+    input[type=range]::-webkit-slider-thumb:hover {
+      box-shadow: 0 0 0 5px rgba(79,142,247,.3);
+    }
+
+    /* Sensitivity track color */
+    #sensitivity { accent-color: var(--accent2); }
+    #sensitivity::-webkit-slider-thumb { background: var(--accent2); box-shadow: 0 0 0 3px rgba(167,139,250,.2); }
+
+    /* ── Footer ── */
+    .footer {
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--border);
+    }
+    .reset-btn {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: color .2s, border-color .2s;
+    }
+    .reset-btn:hover { color: var(--red); border-color: var(--red); }
+    .version { font-size: 10px; color: var(--border); font-family: 'DM Mono', monospace; }
+
+    /* ── Status pill ── */
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
+      font-family: 'DM Mono', monospace;
+      padding: 3px 10px;
+      border-radius: 20px;
+      transition: all .3s;
+    }
+    .status-pill.on  { background: rgba(52,211,153,.1); color: var(--green); }
+    .status-pill.off { background: rgba(248,113,113,.1); color: var(--red); }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .status-pill.on  .status-dot { background: var(--green); animation: pulse 2s infinite; }
+    .status-pill.off .status-dot { background: var(--red); }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="brand">
+    <div class="brand-icon">🛡️</div>
+    <div>
+      <div class="brand-name">NudeGuard</div>
+      <div class="brand-tagline">AI-POWERED SAFE BROWSING</div>
+    </div>
+  </div>
+</div>
+
+<div class="toggle-row">
+  <div>
+    <div class="toggle-label">Shield Active</div>
+    <div class="toggle-sub">Scanning all images</div>
+  </div>
+  <label class="toggle">
+    <input type="checkbox" id="enabledToggle" />
+    <span class="slider"></span>
+  </label>
+</div>
+
+<div class="stats">
+  <div class="stat-box blurred">
+    <div class="stat-num" id="statBlurred">0</div>
+    <div class="stat-label">IMAGES BLURRED</div>
+  </div>
+  <div class="stat-box scanned">
+    <div class="stat-num" id="statScanned">0</div>
+    <div class="stat-label">IMAGES SCANNED</div>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="control-group">
+    <div class="control-header">
+      <span class="control-name">Blur Intensity</span>
+      <span class="control-val" id="blurVal">20px</span>
+    </div>
+    <input type="range" id="blurIntensity" min="4" max="40" value="20" step="2" />
+  </div>
+
+  <div class="control-group">
+    <div class="control-header">
+      <span class="control-name">Sensitivity</span>
+      <span class="control-val" id="sensVal">70%</span>
+    </div>
+    <input type="range" id="sensitivity" min="10" max="95" value="70" step="5" />
+  </div>
+</div>
+
+<div class="footer">
+  <button class="reset-btn" id="resetStats">Reset Stats</button>
+  <span class="status-pill on" id="statusPill">
+    <span class="status-dot"></span>
+    <span id="statusText">ACTIVE</span>
+  </span>
+  <span class="version">v1.0.0</span>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>
