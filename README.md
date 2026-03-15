@@ -39,7 +39,6 @@ nudeguard-extension/
 | Feature | Description |
 |---|---|
 | **Auto-blur** | Scans all images on a page and blurs explicit ones |
-| **Hold to Reveal** | Users can hold the "reveal" button on blurred images for 0.8s to temporarily unblur |
 | **Adjustable Blur Intensity** | Slider from 4px (subtle) to 40px (heavy) |
 | **Adjustable Sensitivity** | Control the nudity score threshold (10%–95%) |
 | **Toggle On/Off** | Instantly pause/resume protection |
