@@ -1,6 +1,6 @@
 # 🛡️ NudeGuard – AI-Powered Safe Browsing Extension
 
-A Chrome extension that automatically detects and blurs explicit images using the [nude.js](https://github.com/pa7/nude.js) nudity detection library.
+A Chrome extension that automatically detects and blurs explicit images using the using pixel values.
 
 ---
 
