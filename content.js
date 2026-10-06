@@ -1,4 +1,4 @@
-// NudeGuard – Content Script v1.3 (hold-until-scanned)
+// NudeGuard – Content Script v1.4 (nude.js integrated)
 
 (function () {
   'use strict';
@@ -17,7 +17,7 @@
   chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (resp) => {
     if (chrome.runtime.lastError) { WARN('Settings error:', chrome.runtime.lastError.message); return; }
     if (resp) settings = { ...settings, ...resp };
-    LOG(`Booted. enabled=${settings.enabled} sensitivity=${settings.sensitivity} blur=${settings.blurIntensity}px`);
+    LOG(`Booted. enabled=${settings.enabled} blur=${settings.blurIntensity}px`);
     if (settings.enabled) init();
   });
 
@@ -55,7 +55,7 @@
     mo.observe(document.body, { childList: true, subtree: true });
   }
 
-  // ── Shimmer styles (injected once) ───────────────────────────────────────────
+  // ── Shimmer styles ───────────────────────────────────────────────────────────
   function injectStyles() {
     if (document.getElementById('nudeguard-styles')) return;
     const s = document.createElement('style');
@@ -107,7 +107,6 @@
     Object.assign(wrap.style, {
       position: 'relative', display: 'inline-block',
       lineHeight: '0', maxWidth: '100%',
-      // Match the image's rendered size so layout doesn't shift
       width:  img.offsetWidth  ? img.offsetWidth  + 'px' : 'auto',
       height: img.offsetHeight ? img.offsetHeight + 'px' : 'auto',
     });
@@ -126,7 +125,6 @@
   }
 
   function releaseImage(img) {
-    // Clean image: remove shimmer + scanning icon, fade in
     const wrap = img.parentElement;
     if (wrap && wrap.classList.contains('nudeguard-wrap')) {
       wrap.querySelector('.nudeguard-shimmer')?.remove();
@@ -164,7 +162,7 @@
     analyzeImage(img).finally(() => setTimeout(processNext, QUEUE_DELAY));
   }
 
-  // ── Analysis ──────────────────────────────────────────────────────────────────
+  // ── Analysis using nude.js ───────────────────────────────────────────────────
   const SKIP_EXTS = /\.(ico|svg|gif|cur|bmp)(\?|#|$)/i;
 
   async function analyzeImage(img) {
@@ -172,35 +170,66 @@
     if (SKIP_EXTS.test(img.src)) { LOG(`Skip (type): ${shortUrl(img.src)}`); releaseImage(img); return; }
     if (img.naturalWidth < 100 || img.naturalHeight < 100) { releaseImage(img); return; }
 
-    // Attempt 1: same-origin direct read
-    let pixels = tryGetPixels(img);
-    if (pixels) {
-      LOG(`✓ Same-origin: ${shortUrl(img.src)}`);
-      return judge(pixels, img);
+    // Attempt 1: direct scan via nude.js
+    let isNude = await scanWithNude(img);
+    if (isNude !== null) {
+      LOG(`✓ Direct nude.js scan: ${shortUrl(img.src)}`);
+      return judge(isNude, img);
     }
 
-    // Attempt 2: CORS fetch
+    // Attempt 2: CORS fetch -> Probe Image
     LOG(`CORS fetch: ${shortUrl(img.src)}`);
     try {
       const resp = await fetch(img.src, { mode: 'cors', credentials: 'omit' });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      pixels = await blobToPixels(await resp.blob());
-      if (pixels) { LOG(`✓ CORS: ${shortUrl(img.src)}`); return judge(pixels, img); }
+      const probeImg = await blobToImage(await resp.blob());
+      if (probeImg) {
+        isNude = await scanWithNude(probeImg);
+        if (isNude !== null) { LOG(`✓ CORS nude.js scan: ${shortUrl(img.src)}`); return judge(isNude, img); }
+      }
     } catch (_) { /* fall through */ }
 
-    // Attempt 3: background service worker fetch (bypasses CORS entirely)
+    // Attempt 3: Background Service Worker fetch -> Probe Image
     LOG(`SW fetch: ${shortUrl(img.src)}`);
     try {
       const dataUrl = await fetchViaBackground(img.src);
-      pixels = await blobToPixels(dataUrlToBlob(dataUrl));
-      if (pixels) { LOG(`✓ SW: ${shortUrl(img.src)}`); return judge(pixels, img); }
+      const probeImg = await blobToImage(dataUrlToBlob(dataUrl));
+      if (probeImg) {
+        isNude = await scanWithNude(probeImg);
+        if (isNude !== null) { LOG(`✓ SW nude.js scan: ${shortUrl(img.src)}`); return judge(isNude, img); }
+      }
     } catch (err) {
       WARN(`All attempts failed (${err.message}): ${shortUrl(img.src)}`);
       sessionStats.skipped++;
     }
 
-    // If we reach here we couldn't scan it — release so the image is still visible
+    // If unreadable, release to keep visible
     releaseImage(img);
+  }
+
+  function scanWithNude(imgEl) {
+    return new Promise((resolve) => {
+      try {
+        if (!window.nude) return resolve(null);
+        window.nude.load(imgEl);
+        window.nude.scan((result) => {
+          resolve(result); // boolean true / false
+        });
+      } catch (_) {
+        // Tainted canvas or empty dimensions
+        resolve(null);
+      }
+    });
+  }
+
+  function blobToImage(blob) {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(blob);
+      const probe = new Image();
+      probe.onload = () => { URL.revokeObjectURL(url); resolve(probe); };
+      probe.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      probe.src = url;
+    });
   }
 
   function fetchViaBackground(url) {
@@ -213,16 +242,6 @@
     });
   }
 
-  function blobToPixels(blob) {
-    return new Promise((resolve) => {
-      const url = URL.createObjectURL(blob);
-      const probe = new Image();
-      probe.onload = () => { const px = tryGetPixels(probe); URL.revokeObjectURL(url); resolve(px); };
-      probe.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-      probe.src = url;
-    });
-  }
-
   function dataUrlToBlob(dataUrl) {
     const [header, b64] = dataUrl.split(',');
     const mime = header.match(/:(.*?);/)[1];
@@ -232,55 +251,23 @@
     return new Blob([bytes], { type: mime });
   }
 
-  function tryGetPixels(imgEl) {
-    try {
-      const MAX = 200;
-      const w = imgEl.naturalWidth, h = imgEl.naturalHeight;
-      const scale = Math.min(1, MAX / Math.max(w, h));
-      const sw = Math.max(1, Math.floor(w * scale));
-      const sh = Math.max(1, Math.floor(h * scale));
-      const canvas = document.createElement('canvas');
-      canvas.width = sw; canvas.height = sh;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(imgEl, 0, 0, sw, sh);
-      return ctx.getImageData(0, 0, sw, sh).data;
-    } catch (_) { return null; }
-  }
-
   // ── Judge ─────────────────────────────────────────────────────────────────────
-  function judge(pixels, img) {
+  function judge(isNude, img) {
     sessionStats.scanned++;
-    const ratio = skinRatio(pixels);
-    const hit = ratio >= settings.sensitivity;
-    LOG(`Skin ${(ratio * 100).toFixed(1)}% ${hit ? '→ BLUR' : '→ clean'}: ${shortUrl(img.src)}`);
-    if (hit) {
-      applyBlur(img);   // keeps image hidden, adds overlay
+    LOG(`nude.js evaluation: ${isNude ? 'Nude → BLUR' : 'Clean'} (${shortUrl(img.src)})`);
+    if (isNude) {
+      applyBlur(img);
       sessionStats.blurred++;
       syncStats();
     } else {
-      releaseImage(img); // fade in
+      releaseImage(img);
     }
-  }
-
-  // ── Skin detection ────────────────────────────────────────────────────────────
-  function skinRatio(data) {
-    let skin = 0, total = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
-      if (a < 30) continue;
-      total++;
-      if (r > 95 && g > 40 && b > 20 &&
-          Math.max(r,g,b) - Math.min(r,g,b) > 15 &&
-          Math.abs(r-g) > 15 && r > g && r > b) skin++;
-    }
-    return total ? skin / total : 0;
   }
 
   // ── Blur / overlay ────────────────────────────────────────────────────────────
   function blurValue() { return `blur(${settings.blurIntensity}px)`; }
 
   function applyBlur(img) {
-    // Remove shimmer/icon, but keep opacity 0 — the blur filter handles the reveal
     const wrap = img.parentElement;
     if (wrap && wrap.classList.contains('nudeguard-wrap')) {
       wrap.querySelector('.nudeguard-shimmer')?.remove();
