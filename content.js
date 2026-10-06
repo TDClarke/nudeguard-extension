@@ -1,4 +1,4 @@
-// NudeGuard – Content Script v1.4 (nude.js integrated)
+// NudeGuard – Content Script v1.6 (Stack Overflow & Crash Fix)
 
 (function () {
   'use strict';
@@ -8,10 +8,14 @@
 
   let settings = { enabled: true, blurIntensity: 20, sensitivity: 0.7 };
   let sessionStats = { blurred: 0, scanned: 0, skipped: 0 };
-  const processedImages = new WeakSet();
-  const QUEUE_DELAY = 80;
+  const processedMedia = new WeakSet();
+  const videoIntervals = new WeakMap();
+  const QUEUE_DELAY = 100;
   let queue = [];
   let processing = false;
+
+  // Max dimension for nude.js scan canvas (Prevents recursion stack overflow)
+  const MAX_SCAN_DIM = 250;
 
   // ── Boot ──────────────────────────────────────────────────────────────────────
   chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (resp) => {
@@ -24,7 +28,7 @@
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.enabled !== undefined) {
       settings.enabled = changes.enabled.newValue;
-      if (!settings.enabled) removeAllBlurs(); else scanAllImages();
+      if (!settings.enabled) removeAllBlurs(); else scanAllMedia();
     }
     if (changes.blurIntensity) settings.blurIntensity = changes.blurIntensity.newValue;
     if (changes.sensitivity)   settings.sensitivity   = changes.sensitivity.newValue;
@@ -34,23 +38,30 @@
   // ── Init ──────────────────────────────────────────────────────────────────────
   function init() {
     injectStyles();
-    const imgs = document.querySelectorAll('img');
-    LOG(`Page loaded. Found ${imgs.length} images.`);
-    imgs.forEach(enqueue);
+    scanAllMedia();
     observeDOM();
   }
 
-  function scanAllImages() { document.querySelectorAll('img').forEach(enqueue); }
+  function scanAllMedia() {
+    const elements = document.querySelectorAll('img, video');
+    elements.forEach(enqueue);
+  }
 
   function observeDOM() {
     const mo = new MutationObserver((mutations) => {
       if (!settings.enabled) return;
-      for (const m of mutations)
+      for (const m of mutations) {
         for (const node of m.addedNodes) {
           if (node.nodeType !== 1) continue;
-          if (node.tagName === 'IMG') enqueue(node);
-          node.querySelectorAll && node.querySelectorAll('img').forEach(enqueue);
+          // Skip NudeGuard's own injected UI elements to prevent MutationObserver loops
+          if (node.classList?.contains('nudeguard-wrap') || node.classList?.contains('nudeguard-shimmer')) continue;
+
+          if (node.tagName === 'IMG' || node.tagName === 'VIDEO') enqueue(node);
+          if (node.querySelectorAll) {
+            node.querySelectorAll('img:not([data-nudeguard]), video:not([data-nudeguard])').forEach(enqueue);
+          }
         }
+      }
     });
     mo.observe(document.body, { childList: true, subtree: true });
   }
@@ -93,22 +104,28 @@
   }
 
   // ── Hold / release ────────────────────────────────────────────────────────────
-  function holdImage(img) {
-    if (!img.src || img.getAttribute('data-nudeguard')) return;
-    if (img.naturalWidth < 100 || img.naturalHeight < 100) return;
-    if (img.parentElement && img.parentElement.classList.contains('nudeguard-wrap')) return;
+  function holdMedia(el) {
+    if (el.getAttribute('data-nudeguard')) return;
 
-    img.setAttribute('data-nudeguard', 'pending');
-    img.style.opacity = '0';
-    img.style.transition = 'opacity 0.35s ease';
+    const width = el.naturalWidth || el.videoWidth || el.offsetWidth;
+    const height = el.naturalHeight || el.videoHeight || el.offsetHeight;
+    if (width < 80 || height < 80) return;
+
+    if (el.parentElement && el.parentElement.classList.contains('nudeguard-wrap')) return;
+
+    el.setAttribute('data-nudeguard', 'pending');
+    el.style.opacity = '0';
+    el.style.transition = 'opacity 0.35s ease';
 
     const wrap = document.createElement('div');
     wrap.className = 'nudeguard-wrap';
     Object.assign(wrap.style, {
-      position: 'relative', display: 'inline-block',
-      lineHeight: '0', maxWidth: '100%',
-      width:  img.offsetWidth  ? img.offsetWidth  + 'px' : 'auto',
-      height: img.offsetHeight ? img.offsetHeight + 'px' : 'auto',
+      position: 'relative',
+      display: 'inline-block',
+      lineHeight: '0',
+      maxWidth: '100%',
+      width:  el.offsetWidth  ? el.offsetWidth  + 'px' : 'auto',
+      height: el.offsetHeight ? el.offsetHeight + 'px' : 'auto',
     });
 
     const shimmer = document.createElement('div');
@@ -118,105 +135,184 @@
     icon.className = 'nudeguard-scanning-icon';
     icon.textContent = '🛡️';
 
-    img.parentNode.insertBefore(wrap, img);
+    el.parentNode?.insertBefore(wrap, el);
     wrap.appendChild(shimmer);
     wrap.appendChild(icon);
-    wrap.appendChild(img);
+    wrap.appendChild(el);
   }
 
-  function releaseImage(img) {
-    const wrap = img.parentElement;
+  function releaseMedia(el) {
+    const wrap = el.parentElement;
     if (wrap && wrap.classList.contains('nudeguard-wrap')) {
       wrap.querySelector('.nudeguard-shimmer')?.remove();
       wrap.querySelector('.nudeguard-scanning-icon')?.remove();
     }
-    img.style.opacity = '1';
-    img.removeAttribute('data-nudeguard');
+    el.style.opacity = '1';
+    if (el.getAttribute('data-nudeguard') === 'pending') {
+      el.removeAttribute('data-nudeguard');
+    }
   }
 
   // ── Queue ─────────────────────────────────────────────────────────────────────
-  function enqueue(img) {
-    if (processedImages.has(img)) return;
-    processedImages.add(img);
-    if (!img.complete || !img.naturalWidth) {
-      img.addEventListener('load', () => {
-        holdImage(img);
-        queue.push(img);
+  function enqueue(el) {
+    if (processedMedia.has(el)) return;
+    processedMedia.add(el);
+
+    if (el.tagName === 'VIDEO') {
+      setupVideoListeners(el);
+      if (el.readyState >= 2 && el.videoWidth > 0) {
+        holdMedia(el);
+        queue.push(el);
         if (!processing) processNext();
-      }, { once: true });
+      } else {
+        el.addEventListener('loadeddata', () => {
+          holdMedia(el);
+          queue.push(el);
+          if (!processing) processNext();
+        }, { once: true });
+      }
     } else {
-      holdImage(img);
-      queue.push(img);
-      if (!processing) processNext();
+      if (!el.complete || !el.naturalWidth) {
+        el.addEventListener('load', () => {
+          holdMedia(el);
+          queue.push(el);
+          if (!processing) processNext();
+        }, { once: true });
+      } else {
+        holdMedia(el);
+        queue.push(el);
+        if (!processing) processNext();
+      }
     }
   }
 
   function processNext() {
     if (!queue.length) {
       processing = false;
-      LOG(`Done. Scanned: ${sessionStats.scanned} Blurred: ${sessionStats.blurred} Skipped: ${sessionStats.skipped}`);
       return;
     }
     processing = true;
-    const img = queue.shift();
-    analyzeImage(img).finally(() => setTimeout(processNext, QUEUE_DELAY));
+    const el = queue.shift();
+    analyzeMedia(el).finally(() => setTimeout(processNext, QUEUE_DELAY));
+  }
+
+  // ── Video Continuous Sampling ────────────────────────────────────────────────
+  function setupVideoListeners(video) {
+    let seekDebounce;
+    video.addEventListener('seeked', () => {
+      clearTimeout(seekDebounce);
+      seekDebounce = setTimeout(() => analyzeMedia(video), 200);
+    });
+
+    video.addEventListener('play', () => {
+      if (videoIntervals.has(video)) clearInterval(videoIntervals.get(video));
+      const timer = setInterval(() => {
+        if (video.paused || video.ended) {
+          clearInterval(timer);
+          videoIntervals.delete(video);
+        } else {
+          analyzeMedia(video);
+        }
+      }, 2000);
+      videoIntervals.set(video, timer);
+    });
+
+    video.addEventListener('pause', () => {
+      if (videoIntervals.has(video)) {
+        clearInterval(videoIntervals.get(video));
+        videoIntervals.delete(video);
+      }
+    });
+  }
+
+  // ── Downscaling Offscreen Canvas Helper (Fixes Stack Overflow) ───────────────
+  function createDownscaledCanvas(mediaEl) {
+    const origWidth = mediaEl.naturalWidth || mediaEl.videoWidth || mediaEl.width || mediaEl.offsetWidth;
+    const origHeight = mediaEl.naturalHeight || mediaEl.videoHeight || mediaEl.height || mediaEl.offsetHeight;
+
+    if (!origWidth || !origHeight) return null;
+
+    let scale = 1;
+    if (origWidth > MAX_SCAN_DIM || origHeight > MAX_SCAN_DIM) {
+      scale = Math.min(MAX_SCAN_DIM / origWidth, MAX_SCAN_DIM / origHeight);
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.floor(origWidth * scale));
+    canvas.height = Math.max(1, Math.floor(origHeight * scale));
+
+    const ctx = canvas.getContext('2d');
+    try {
+      ctx.drawImage(mediaEl, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    } catch (_) {
+      return null;
+    }
   }
 
   // ── Analysis using nude.js ───────────────────────────────────────────────────
-  const SKIP_EXTS = /\.(ico|svg|gif|cur|bmp)(\?|#|$)/i;
+  const SKIP_EXTS = /\.(ico|svg|cur|bmp)(\?|#|$)/i;
 
-  async function analyzeImage(img) {
-    if (!img.src || img.src.startsWith('chrome-extension://')) { releaseImage(img); return; }
-    if (SKIP_EXTS.test(img.src)) { LOG(`Skip (type): ${shortUrl(img.src)}`); releaseImage(img); return; }
-    if (img.naturalWidth < 100 || img.naturalHeight < 100) { releaseImage(img); return; }
+  async function analyzeMedia(el) {
+    const src = el.src || el.currentSrc;
+    if (SKIP_EXTS.test(src)) { releaseMedia(el); return; }
 
-    // Attempt 1: direct scan via nude.js
-    let isNude = await scanWithNude(img);
-    if (isNude !== null) {
-      LOG(`✓ Direct nude.js scan: ${shortUrl(img.src)}`);
-      return judge(isNude, img);
+    const width = el.naturalWidth || el.videoWidth || el.offsetWidth;
+    const height = el.naturalHeight || el.videoHeight || el.offsetHeight;
+    if (width < 80 || height < 80) { releaseMedia(el); return; }
+
+    // Attempt 1: Safe Downscaled Canvas Scan
+    const scaledCanvas = createDownscaledCanvas(el);
+    if (scaledCanvas) {
+      const isNude = await scanWithNude(scaledCanvas);
+      if (isNude !== null) {
+        return judge(isNude, el);
+      }
     }
 
-    // Attempt 2: CORS fetch -> Probe Image
-    LOG(`CORS fetch: ${shortUrl(img.src)}`);
-    try {
-      const resp = await fetch(img.src, { mode: 'cors', credentials: 'omit' });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const probeImg = await blobToImage(await resp.blob());
-      if (probeImg) {
-        isNude = await scanWithNude(probeImg);
-        if (isNude !== null) { LOG(`✓ CORS nude.js scan: ${shortUrl(img.src)}`); return judge(isNude, img); }
-      }
-    } catch (_) { /* fall through */ }
+    // Attempt 2: CORS fetch -> Probe Image -> Downscaled Canvas
+    if (el.tagName === 'IMG' && src && !src.startsWith('chrome-extension://')) {
+      try {
+        const resp = await fetch(src, { mode: 'cors', credentials: 'omit' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const probeImg = await blobToImage(await resp.blob());
+        if (probeImg) {
+          const probeCanvas = createDownscaledCanvas(probeImg);
+          if (probeCanvas) {
+            const isNude = await scanWithNude(probeCanvas);
+            if (isNude !== null) return judge(isNude, el);
+          }
+        }
+      } catch (_) { /* fall through */ }
 
-    // Attempt 3: Background Service Worker fetch -> Probe Image
-    LOG(`SW fetch: ${shortUrl(img.src)}`);
-    try {
-      const dataUrl = await fetchViaBackground(img.src);
-      const probeImg = await blobToImage(dataUrlToBlob(dataUrl));
-      if (probeImg) {
-        isNude = await scanWithNude(probeImg);
-        if (isNude !== null) { LOG(`✓ SW nude.js scan: ${shortUrl(img.src)}`); return judge(isNude, img); }
+      // Attempt 3: Service Worker fetch -> Probe Image -> Downscaled Canvas
+      try {
+        const dataUrl = await fetchViaBackground(src);
+        const probeImg = await blobToImage(dataUrlToBlob(dataUrl));
+        if (probeImg) {
+          const probeCanvas = createDownscaledCanvas(probeImg);
+          if (probeCanvas) {
+            const isNude = await scanWithNude(probeCanvas);
+            if (isNude !== null) return judge(isNude, el);
+          }
+        }
+      } catch (err) {
+        sessionStats.skipped++;
       }
-    } catch (err) {
-      WARN(`All attempts failed (${err.message}): ${shortUrl(img.src)}`);
-      sessionStats.skipped++;
     }
 
-    // If unreadable, release to keep visible
-    releaseImage(img);
+    releaseMedia(el);
   }
 
-  function scanWithNude(imgEl) {
+  function scanWithNude(canvasEl) {
     return new Promise((resolve) => {
       try {
         if (!window.nude) return resolve(null);
-        window.nude.load(imgEl);
+        window.nude.load(canvasEl);
         window.nude.scan((result) => {
-          resolve(result); // boolean true / false
+          resolve(result);
         });
       } catch (_) {
-        // Tainted canvas or empty dimensions
         resolve(null);
       }
     });
@@ -252,36 +348,35 @@
   }
 
   // ── Judge ─────────────────────────────────────────────────────────────────────
-  function judge(isNude, img) {
+  function judge(isNude, el) {
     sessionStats.scanned++;
-    LOG(`nude.js evaluation: ${isNude ? 'Nude → BLUR' : 'Clean'} (${shortUrl(img.src)})`);
     if (isNude) {
-      applyBlur(img);
+      applyBlur(el);
       sessionStats.blurred++;
       syncStats();
-    } else {
-      releaseImage(img);
+    } else if (el.getAttribute('data-nudeguard') !== 'blurred') {
+      releaseMedia(el);
     }
   }
 
-  // ── Blur / overlay ────────────────────────────────────────────────────────────
+  // ── Blur / Overlay ────────────────────────────────────────────────────────────
   function blurValue() { return `blur(${settings.blurIntensity}px)`; }
 
-  function applyBlur(img) {
-    const wrap = img.parentElement;
+  function applyBlur(el) {
+    const wrap = el.parentElement;
     if (wrap && wrap.classList.contains('nudeguard-wrap')) {
       wrap.querySelector('.nudeguard-shimmer')?.remove();
       wrap.querySelector('.nudeguard-scanning-icon')?.remove();
     }
-    img.setAttribute('data-nudeguard', 'blurred');
-    img.style.opacity = '1';
-    img.style.filter = blurValue();
-    img.style.transition = 'opacity 0.3s ease, filter 0.4s ease';
-    addRevealOverlay(img);
+    el.setAttribute('data-nudeguard', 'blurred');
+    el.style.opacity = '1';
+    el.style.filter = blurValue();
+    el.style.transition = 'opacity 0.3s ease, filter 0.4s ease';
+    addRevealOverlay(el);
   }
 
-  function addRevealOverlay(img) {
-    const wrap = img.parentElement;
+  function addRevealOverlay(el) {
+    const wrap = el.parentElement;
     if (!wrap || !wrap.classList.contains('nudeguard-wrap')) return;
     if (wrap.querySelector('.nudeguard-badge')) return;
 
@@ -301,11 +396,11 @@
   }
 
   function removeAllBlurs() {
-    document.querySelectorAll('[data-nudeguard]').forEach((img) => {
-      img.style.filter = '';
-      img.style.opacity = '1';
-      img.removeAttribute('data-nudeguard');
-      const wrap = img.parentElement;
+    document.querySelectorAll('[data-nudeguard]').forEach((el) => {
+      el.style.filter = '';
+      el.style.opacity = '1';
+      el.removeAttribute('data-nudeguard');
+      const wrap = el.parentElement;
       if (wrap?.classList.contains('nudeguard-wrap')) {
         wrap.querySelector('.nudeguard-shimmer')?.remove();
         wrap.querySelector('.nudeguard-scanning-icon')?.remove();
@@ -315,14 +410,12 @@
   }
 
   function updateExistingBlurs() {
-    document.querySelectorAll('[data-nudeguard="blurred"]').forEach((img) => {
-      img.style.filter = blurValue();
+    document.querySelectorAll('[data-nudeguard="blurred"]').forEach((el) => {
+      el.style.filter = blurValue();
     });
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
-  function shortUrl(u) { try { return new URL(u).pathname.slice(-40); } catch(_) { return String(u).slice(-40); } }
-
   let syncTimer;
   function syncStats() {
     clearTimeout(syncTimer);
