@@ -11,6 +11,7 @@ nudeguard-extension/
 ├── manifest.json      # Extension manifest (MV3)
 ├── background.js      # Service worker – settings & stats persistence
 ├── content.js         # Page scanner – detects & blurs images
+├── noworker.nude.js # Optimised nude.js version
 ├── popup.html         # Extension popup UI
 ├── popup.js           # Popup logic
 ├── README.md
@@ -60,7 +61,7 @@ nudeguard-extension/
 
 ## ⚠️ Limitations
 
-- **Accuracy**: nude.js uses skin-pixel heuristics, not deep learning. Expect some false positives and false negatives.
+- **Accuracy**: noworker.nude.js uses skin-pixel heuristics, not deep learning. Expect some false positives and false negatives.
 - **Performance**: Very image-heavy pages may see a slight slowdown; the queue throttle minimizes this.
 - **HTTPS**: Works on both HTTP and HTTPS sites.
 
